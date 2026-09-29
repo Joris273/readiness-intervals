@@ -1,0 +1,108 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Pakete ausdruecklich angeben: der Standard enthaelt das Paket "tools", das es im
+      # aktuellen SDK nicht mehr gibt — sonst bricht dieser Schritt ab.
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      # Beim Aktualisieren eines bestehenden Repos bleiben Dateien der Vorversion liegen,
+      # wenn es sie im neuen Stand nicht mehr gibt. Der Compiler meldet das als Dutzende
+      # Folgefehler, aus denen die Ursache kaum erkennbar ist. Hier wird sie benannt.
+      - name: Projektstand pruefen
+        run: |
+          if [ ! -f tools/expected-files.txt ]; then
+            echo "::error::tools/expected-files.txt fehlt im Repo."
+            echo "Der Ordner tools/ wurde beim Hochladen nicht mituebertragen."
+            echo "Vorhandene Ordner im Projektstamm:"
+            ls -1 | sed 's/^/  /'
+            exit 1
+          fi
+          find app/src -name '*.kt' | sort > /tmp/actual.txt
+          sort tools/expected-files.txt -o /tmp/expected.txt
+          echo "Erwartet: $(wc -l < /tmp/expected.txt) Dateien | vorhanden: $(wc -l < /tmp/actual.txt)"
+          extra=$(comm -13 /tmp/expected.txt /tmp/actual.txt)
+          missing=$(comm -23 /tmp/expected.txt /tmp/actual.txt)
+          rc=0
+          if [ -n "$extra" ]; then
+            echo "::error::Reste einer Vorversion — bitte diese Dateien loeschen:"
+            echo "$extra" | sed 's/^/  /'
+            rc=1
+          fi
+          if [ -n "$missing" ]; then
+            echo "::error::Es fehlen Dateien:"
+            echo "$missing" | sed 's/^/  /'
+            rc=1
+          fi
+          [ $rc -eq 0 ] && echo "Projektstand vollstaendig und ohne Altlasten."
+          exit $rc
+
+      # Der Signierschluessel liegt NICHT im Repository. Sind die Secrets gesetzt, signiert
+      # die CI mit demselben Schluessel wie die Releases (APK laesst sich als Update
+      # installieren). Ohne Secrets entsteht eine APK mit Wegwerf-Debugschluessel.
+      - name: Signierschluessel bereitstellen (optional)
+        env:
+          KEYSTORE_B64: ${{ secrets.READINESS_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.READINESS_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.READINESS_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.READINESS_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "Kein Signier-Secret gesetzt: Build mit Standard-Debug-Schluessel."
+            exit 0
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/readiness.keystore"
+          printf 'readiness.keystore=%s\nreadiness.keystore.password=%s\nreadiness.key.alias=%s\nreadiness.key.password=%s\n' \
+            "$RUNNER_TEMP/readiness.keystore" "$KEYSTORE_PASSWORD" "$KEY_ALIAS" "$KEY_PASSWORD" > "$RUNNER_TEMP/signing.properties"
+          echo "READINESS_SIGNING_FILE=$RUNNER_TEMP/signing.properties" >> "$GITHUB_ENV"
+
+      # Getrennt vom Test, damit der Schrittname sofort zeigt, WO es klemmt:
+      # ein Compilerfehler in der App oder eine fehlgeschlagene Pruefung.
+      - name: App kompilieren
+        run: gradle :app:compileDebugKotlin --no-daemon --stacktrace
+
+      # Unit-Tests der Domaene inkl. Monte-Carlo-Kalibrierung der Schwellen.
+      - name: Wissenschaftliche Logik pruefen
+        run: gradle :app:testDebugUnitTest --no-daemon --stacktrace
+
+      - name: Testbericht sichern
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: ignore
+
+      - name: Debug-APK bauen
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+
+      - name: APK hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: readiness-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

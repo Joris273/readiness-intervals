@@ -1,0 +1,31 @@
+# --- Geheimnisse und rechnerspezifische Dateien (nie einchecken) ---
+local.properties
+signing.properties
+*.jks
+*.keystore
+*.p12
+*.pem
+
+# --- Persönliche Daten (Rohdaten für den Backtest, Exporte) ---
+backtest*.json
+raw*.json
+*.fit
+
+# --- Android / Gradle ---
+.gradle/
+.kotlin/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+.idea/
+*.iml
+
+# --- Protokolle ---
+*.log
+
+# --- System ---
+.DS_Store
+Thumbs.db

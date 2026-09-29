@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- true nur im Build-Typ "demo": synthetische Daten statt intervals.icu (für Screenshots) -->
+    <bool name="demo_mode">false</bool>
+</resources>
